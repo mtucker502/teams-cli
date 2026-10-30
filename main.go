@@ -88,7 +88,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "token refresh failed: %v\n", err)
 			os.Exit(1)
 		}
-		if err := applyTokenDirToEnv(options.TokenDir); err != nil {
+		if err := exportTokensToEnv(options.TokenDir); err != nil {
 			fmt.Fprintf(os.Stderr, "token setup failed: %v\n", err)
 			os.Exit(1)
 		}

@@ -22,8 +22,11 @@ type TeamsState struct {
 	channelById        map[string]Channel
 	teamById           map[string]*csa.Team
 	// displayNames caches member MRI -> display name. An empty value records a
-	// lookup that returned nothing so it is not retried on every refresh.
+	// lookup that returned nothing so it is not retried on every refresh. The
+	// map is replaced, never mutated, and namesMu guards the replacement: the
+	// background tree refresh reads it while the UI goroutine swaps it.
 	displayNames  map[string]string
+	namesMu       sync.RWMutex
 	nameLookupErr error
 	// duplicateChatIDs lists chats the last conversations response repeated.
 	duplicateChatIDs []string
@@ -157,7 +160,7 @@ func (s *TeamsState) applyConversationData(data *conversationData) {
 	s.pinnedChannelOrder = data.pinnedChannelOrder
 	s.channelById = data.channelById
 	s.teamById = data.teamById
-	s.displayNames = data.displayNames
+	s.setDisplayNames(data.displayNames)
 	s.nameLookupErr = data.nameLookupErr
 	s.duplicateChatIDs = data.duplicateChatIDs
 }
@@ -195,8 +198,9 @@ func dedupeChats(chats []csa.Chat) ([]csa.Chat, []string) {
 // chat members the conversations response left unnamed. Lookup failures are
 // returned alongside the partial map rather than aborting the refresh.
 func (s *TeamsState) resolveDisplayNames(chats []csa.Chat) (map[string]string, error) {
-	names := make(map[string]string, len(s.displayNames))
-	for mri, name := range s.displayNames {
+	known := s.displayNameMap()
+	names := make(map[string]string, len(known))
+	for mri, name := range known {
 		names[mri] = name
 	}
 
@@ -270,6 +274,20 @@ func chunkStrings(items []string, size int) [][]string {
 	return chunks
 }
 
+// displayNameMap returns the current name cache. Callers only read it; a
+// refresh installs a new map through setDisplayNames instead of editing it.
+func (s *TeamsState) displayNameMap() map[string]string {
+	s.namesMu.RLock()
+	defer s.namesMu.RUnlock()
+	return s.displayNames
+}
+
+func (s *TeamsState) setDisplayNames(names map[string]string) {
+	s.namesMu.Lock()
+	defer s.namesMu.Unlock()
+	s.displayNames = names
+}
+
 func (s *TeamsState) selfMri() string {
 	if s.me == nil {
 		return ""
@@ -296,7 +314,7 @@ func (s *TeamsState) displayNameFor(mri string) string {
 		return s.selfDisplayName()
 	}
 
-	return strings.TrimSpace(s.displayNames[mri])
+	return strings.TrimSpace(s.displayNameMap()[mri])
 }
 
 func sortTeams(teams []csa.Team) {

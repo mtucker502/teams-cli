@@ -130,14 +130,21 @@ func parseRedirect(rawURL string) url.Values {
 }
 
 func obtainToken(ctx context.Context, browser redirectBrowser, tokenType, tenantID string, timeout time.Duration) (string, jwtMetadata, error) {
+	stepCtx := ctx
 	if timeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		stepCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 
-	redirect, err := browser.ObtainRedirect(ctx, authorizeURL(tokenType, tenantID))
+	redirect, err := browser.ObtainRedirect(stepCtx, authorizeURL(tokenType, tenantID))
 	if err != nil {
+		// Only this step's own timeout says the sign-in stalled on a person.
+		// The caller giving up (shutdown, an overall deadline) says nothing
+		// about that, and must not switch off silent retries.
+		if ctx.Err() != nil {
+			return "", jwtMetadata{}, fmt.Errorf("%s token: %w", tokenType, ctx.Err())
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return "", jwtMetadata{}, fmt.Errorf("%w: %v", errTokenFlowTimeout, err)
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,4 +122,49 @@ func TestNoteAuthFailureIgnoresOtherErrors(t *testing.T) {
 
 	state.noteAuthFailure(errors.New("dial tcp: timeout"))
 	time.Sleep(50 * time.Millisecond)
+}
+
+func (s *AppState) tokenRefreshRunning() bool {
+	return atomic.LoadUint32(&s.tokenRefreshActive) == 1
+}
+
+func TestNoteAuthFailureDoesNotRefreshAgainRightAfterSuccess(t *testing.T) {
+	state := newUITestState()
+	calls := make(chan struct{}, 4)
+	state.refreshFunc = func(ctx context.Context, allowInteractive bool) error {
+		calls <- struct{}{}
+		return nil
+	}
+	state.reloadFunc = func() error { return nil }
+	rejected := &messageFetchStatusError{StatusCode: 403, Status: "403 Forbidden"}
+
+	state.noteAuthFailure(rejected)
+	waitFor(t, "first refresh to finish", func() bool { return len(calls) == 1 && !state.tokenRefreshRunning() })
+
+	state.noteAuthFailure(rejected)
+	time.Sleep(50 * time.Millisecond)
+	if len(calls) != 1 {
+		t.Fatalf("expected a rejection right after a successful refresh to be ignored, got %d refreshes", len(calls))
+	}
+
+	// Once the cooldown has passed the next rejection refreshes again.
+	atomic.StoreInt64(&state.lastTokenRefreshAt, time.Now().Add(-authFailureRefreshCooldown-time.Second).UnixNano())
+	state.noteAuthFailure(rejected)
+	waitFor(t, "second refresh", func() bool { return len(calls) == 2 })
+}
+
+func TestHandleRefreshOutcomeUsesSingleFlightRefreshes(t *testing.T) {
+	state := newUITestState()
+	state.reloadFunc = func() error { return nil }
+	// Pretend both refreshes are already in flight: the outcome handler must
+	// go through the same guards as the ticker instead of starting duplicates.
+	atomic.StoreUint32(&state.liveMessageRefreshActive, 1)
+	atomic.StoreUint32(&state.liveTreeRefreshActive, 1)
+
+	state.handleRefreshOutcome(nil)
+
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadUint32(&state.liveMessageRefreshActive) != 1 || atomic.LoadUint32(&state.liveTreeRefreshActive) != 1 {
+		t.Fatal("expected refresh guards to be left alone when a refresh is already running")
+	}
 }

@@ -138,7 +138,7 @@ func (s *AppState) start() {
 		return
 	}
 
-	rootToken, err := resolveToken(tokenTypeSkype, "")
+	rootToken, err := resolveToken(tokenTypeSkype, s.tokenDir)
 	if err != nil {
 		s.appLogger().WithError(err).Error("unable to read skype token for messaging")
 		s.showError(err)
@@ -155,7 +155,7 @@ func (s *AppState) start() {
 	s.appLogger().WithFields(logrus.Fields{
 		"teams_count":   len(s.conversations.Teams),
 		"chat_count":    len(s.conversations.Chats),
-		"display_names": len(s.displayNames),
+		"display_names": len(s.displayNameMap()),
 	}).Info("teams state initialized")
 	s.logConversationDataIssues()
 

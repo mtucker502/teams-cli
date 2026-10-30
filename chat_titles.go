@@ -16,7 +16,7 @@ func (s *AppState) chatTitle(chat csa.Chat) string {
 		selfDisplayName = s.me.DisplayName
 	}
 
-	return resolveChatTitleWith(chat, selfMri, selfDisplayName, s.displayNames)
+	return resolveChatTitleWith(chat, selfMri, selfDisplayName, s.displayNameMap())
 }
 
 func resolveChatTitle(chat csa.Chat, selfMri, selfDisplayName string) string {
@@ -50,13 +50,13 @@ func resolveChatTitleWith(chat csa.Chat, selfMri, selfDisplayName string, displa
 		return subject
 	}
 
-	names, unnamed := chatParticipantNames(chat, selfMri, displayNames)
+	names, unlisted := chatParticipantNames(chat, selfMri, displayNames)
 	if len(names) > 0 {
 		shown := names
 		if len(shown) > maxNamesInChatTitle {
 			shown = shown[:maxNamesInChatTitle]
 		}
-		remaining := unnamed + len(names) - len(shown)
+		remaining := unlisted + len(names) - len(shown)
 		if remaining > 0 {
 			return fmt.Sprintf("%s +%d", strings.Join(shown, ", "), remaining)
 		}
@@ -76,11 +76,14 @@ func resolveChatTitleWith(chat csa.Chat, selfMri, selfDisplayName string, displa
 }
 
 // chatParticipantNames returns the sorted, de-duplicated names of the other
-// participants and how many other participants have no resolvable name.
+// participants and how many other participants are not in that list: those
+// with no resolvable name, and those sharing a name with someone already
+// listed. Counting the latter keeps a group chat of two people with the same
+// name from looking like the direct chat with one of them.
 func chatParticipantNames(chat csa.Chat, selfMri string, displayNames map[string]string) ([]string, int) {
 	names := []string{}
 	seen := map[string]struct{}{}
-	unnamed := 0
+	unlisted := 0
 
 	for _, member := range chat.Members {
 		if member.Mri == selfMri {
@@ -91,11 +94,12 @@ func chatParticipantNames(chat csa.Chat, selfMri string, displayNames map[string
 			name = strings.TrimSpace(displayNames[member.Mri])
 		}
 		if name == "" {
-			unnamed += 1
+			unlisted += 1
 			continue
 		}
 		key := strings.ToLower(name)
 		if _, ok := seen[key]; ok {
+			unlisted += 1
 			continue
 		}
 		seen[key] = struct{}{}
@@ -106,7 +110,7 @@ func chatParticipantNames(chat csa.Chat, selfMri string, displayNames map[string
 		return strings.ToLower(names[i]) < strings.ToLower(names[j])
 	})
 
-	return names, unnamed
+	return names, unlisted
 }
 
 func anonymousChatTitle(chat csa.Chat, selfMri string) string {

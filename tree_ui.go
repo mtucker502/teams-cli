@@ -544,14 +544,7 @@ func (s *AppState) deliverMessage(target ConversationTarget, text string) {
 			"conversation_id":    target.ID,
 			"conversation_title": target.Title,
 		}).Warn("message send failed")
-		s.app.QueueUpdateDraw(func() {
-			if compose, ok := s.components[InCompose].(*tview.InputField); ok {
-				compose.SetText(text)
-			}
-			if s.currentConversationIs(target.ID) {
-				s.updateConversationPaneTitle(target, time.Time{}, "send failed, press Enter to retry (see log)")
-			}
-		})
+		s.app.QueueUpdateDraw(func() { s.restoreFailedSend(target, text) })
 		return
 	}
 
@@ -559,7 +552,30 @@ func (s *AppState) deliverMessage(target ConversationTarget, text string) {
 		"conversation_id":    target.ID,
 		"conversation_title": target.Title,
 	}).Info("message sent")
-	s.refreshSelectedConversationMessages()
+	s.startMessageRefresh()
+}
+
+// restoreFailedSend puts the text of a failed send back into the compose
+// field for a retry, but only while the same conversation is still selected
+// and nothing newer has been typed. The compose field is shared by every
+// conversation, so restoring blindly could send the text to the wrong chat
+// or wipe out a draft the user started in the meantime.
+func (s *AppState) restoreFailedSend(target ConversationTarget, text string) {
+	if !s.currentConversationIs(target.ID) {
+		s.appLogger().WithFields(logrus.Fields{
+			"conversation_id":    target.ID,
+			"conversation_title": target.Title,
+		}).Warn("failed message not restored: another conversation is selected")
+		return
+	}
+
+	compose, ok := s.components[InCompose].(*tview.InputField)
+	if ok && strings.TrimSpace(compose.GetText()) == "" {
+		compose.SetText(text)
+		s.updateConversationPaneTitle(target, time.Time{}, "send failed, press Enter to retry (see log)")
+		return
+	}
+	s.updateConversationPaneTitle(target, time.Time{}, "send failed (see log)")
 }
 
 func (s *AppState) activateTreeNode(node *tview.TreeNode) {

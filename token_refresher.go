@@ -11,18 +11,41 @@ import (
 )
 
 const (
-	tokenExpiryWindow        = 5 * time.Minute
-	silentRefreshTimeout     = 2 * time.Minute
+	tokenExpiryWindow = 5 * time.Minute
+	// silentRefreshTimeout bounds a whole headless run. The flow itself allows
+	// headlessTokenTimeout per authorize step (Teams token, a tenant probe for
+	// personal accounts, skype, chatsvcagg), so the outer deadline leaves room
+	// for all of them plus browser startup and the tenant listing.
+	silentRefreshTimeout     = 4*headlessTokenTimeout + 30*time.Second
 	interactiveRefreshWindow = 12 * time.Minute
 	noticeClearDelay         = 10 * time.Second
+	// authFailureRefreshCooldown is how long after a successful refresh a
+	// rejected request is taken at face value. Tokens that were just minted
+	// are not expired, so a 401 or 403 in this window is about the request
+	// (for example a conversation the user has no access to), not the sign-in.
+	authFailureRefreshCooldown = 5 * time.Minute
 )
 
 // noteAuthFailure triggers a background token refresh when an API call was
-// rejected for bad credentials.
+// rejected for bad credentials, unless the tokens were refreshed moments ago.
 func (s *AppState) noteAuthFailure(err error) {
-	if isAuthFailure(err) {
-		s.requestTokenRefresh("credentials rejected")
+	if !isAuthFailure(err) {
+		return
 	}
+	if since, ok := s.sinceLastTokenRefresh(); ok && since < authFailureRefreshCooldown {
+		s.appLogger().WithError(err).WithField("refreshed_ago", since.Round(time.Second).String()).
+			Debug("request rejected shortly after a token refresh; not refreshing again")
+		return
+	}
+	s.requestTokenRefresh("credentials rejected")
+}
+
+func (s *AppState) sinceLastTokenRefresh() (time.Duration, bool) {
+	last := atomic.LoadInt64(&s.lastTokenRefreshAt)
+	if last == 0 {
+		return 0, false
+	}
+	return time.Since(time.Unix(0, last)), true
 }
 
 // checkTokenExpiry refreshes ahead of time when a token is about to lapse.
@@ -74,6 +97,7 @@ func (s *AppState) startInteractiveSignIn() {
 func (s *AppState) handleRefreshOutcome(err error) {
 	switch {
 	case err == nil:
+		atomic.StoreInt64(&s.lastTokenRefreshAt, time.Now().UnixNano())
 		reload := s.reloadFunc
 		if reload == nil {
 			reload = s.reloadSession
@@ -86,8 +110,8 @@ func (s *AppState) handleRefreshOutcome(err error) {
 		atomic.StoreUint32(&s.signInRequired, 0)
 		s.appLogger().Info("tokens refreshed and session reloaded")
 		s.setTransientNotice("Teams sign-in refreshed; signed in again")
-		go s.refreshConversationTree()
-		go s.refreshSelectedConversationMessages()
+		s.startConversationTreeRefresh()
+		s.startMessageRefresh()
 	case errors.Is(err, errSignInRequired):
 		atomic.StoreUint32(&s.signInRequired, 1)
 		s.appLogger().WithError(err).Warn("silent token refresh needs a person")
@@ -119,7 +143,7 @@ func (s *AppState) defaultRefresh(ctx context.Context, interactive bool) error {
 // reloadSession rebuilds the library client and the messaging session from
 // the freshly written token files.
 func (s *AppState) reloadSession() error {
-	if err := applyTokenDirToEnv(s.tokenDir); err != nil {
+	if err := exportTokensToEnv(s.tokenDir); err != nil {
 		return err
 	}
 
@@ -145,10 +169,6 @@ func (s *AppState) reloadSession() error {
 
 func (s *AppState) signInNeeded() bool {
 	return atomic.LoadUint32(&s.signInRequired) == 1
-}
-
-func (s *AppState) tokenRefreshRunning() bool {
-	return atomic.LoadUint32(&s.tokenRefreshActive) == 1
 }
 
 // setNotice stores a status line shown in the help bar and asks for a redraw.

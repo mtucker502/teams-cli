@@ -32,9 +32,11 @@ func TestResolveChatTitleUsesSortedParticipantNames(t *testing.T) {
 		},
 	}
 
+	// Two different members share the name "alpha": one is listed, the other
+	// counts toward the remainder so the title still reflects three people.
 	got := resolveChatTitle(chat, "self", "Me")
-	if got != "Alpha, bravo" {
-		t.Fatalf("expected sorted unique participant names, got %q", got)
+	if got != "Alpha, bravo +1" {
+		t.Fatalf("expected sorted unique participant names plus remainder, got %q", got)
 	}
 }
 
@@ -266,4 +268,42 @@ func TestDedupeChatsLeavesUniqueListAlone(t *testing.T) {
 	if len(got) != 2 || len(duplicates) != 0 {
 		t.Fatalf("expected unchanged list and no duplicates, got %+v %v", got, duplicates)
 	}
+}
+
+func TestResolveChatTitleCountsSameNamedMembersTowardRemaining(t *testing.T) {
+	chat := csa.Chat{
+		Members: []csa.ChatMember{
+			{Mri: "self"}, {Mri: "8:orgid:1", FriendlyName: "Alex Kim"}, {Mri: "8:orgid:2", FriendlyName: "Alex Kim"},
+		},
+	}
+
+	if got := resolveChatTitleWith(chat, "self", "Me", nil); got != "Alex Kim +1" {
+		t.Fatalf("expected the group chat to stay distinguishable from a direct chat, got %q", got)
+	}
+
+	direct := csa.Chat{IsOneOnOne: true, Members: []csa.ChatMember{{Mri: "self"}, {Mri: "8:orgid:1", FriendlyName: "Alex Kim"}}}
+	if got := resolveChatTitleWith(direct, "self", "Me", nil); got != "Alex Kim" {
+		t.Fatalf("expected direct chat title unchanged, got %q", got)
+	}
+}
+
+func TestResolveDisplayNamesIsSafeAlongsideApply(t *testing.T) {
+	state := &TeamsState{displayNames: map[string]string{"a": "Alpha"}}
+	chats := []csa.Chat{{ChatType: "chat", Members: []csa.ChatMember{{Mri: "self"}, {Mri: "a"}}}}
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			state.applyConversationData(&conversationData{displayNames: map[string]string{"a": "Alpha", "b": "Beta"}})
+			_ = state.displayNameFor("a")
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		names, err := state.resolveDisplayNames(chats)
+		if err != nil || names["a"] != "Alpha" {
+			t.Fatalf("unexpected lookup result %v err=%v", names, err)
+		}
+	}
+	<-done
 }

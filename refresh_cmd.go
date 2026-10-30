@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
@@ -35,7 +37,13 @@ func runRefreshTokens(ctx context.Context, out io.Writer, in io.Reader, options 
 		if err := os.RemoveAll(profileDir); err != nil {
 			return fmt.Errorf("unable to remove browser profile %s: %v", profileDir, err)
 		}
-		fmt.Fprintf(out, "Removed browser profile %s\n", profileDir)
+		// The saved sign-in cookies live beside the profile and would sign the
+		// next run straight back in, so a logout has to drop them too.
+		jarPath := cookieJarPath(profileDir)
+		if err := os.Remove(jarPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("unable to remove saved sign-in cookies %s: %v", jarPath, err)
+		}
+		fmt.Fprintf(out, "Removed browser profile %s\nRemoved saved sign-in cookies %s\n", profileDir, jarPath)
 		return nil
 	}
 

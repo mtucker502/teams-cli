@@ -90,9 +90,27 @@ func resolveToken(tokenType, tokenDir string) (resolvedToken, error) {
 	}, nil
 }
 
+// applyTokenDirToEnv exports the tokens under an explicit --token-dir so the
+// Teams library picks them up. An unset directory is left alone: tokens may
+// then come from the MS_TEAMS_*_TOKEN variables the process started with.
 func applyTokenDirToEnv(tokenDir string) error {
 	if strings.TrimSpace(tokenDir) == "" {
 		return nil
+	}
+
+	return exportTokensToEnv(tokenDir)
+}
+
+// exportTokensToEnv publishes the runtime tokens saved under tokenDir, or the
+// default directory when it is empty, as MS_TEAMS_*_TOKEN variables. Both the
+// Teams library and resolveToken read those first, so this is what makes a
+// freshly written token file take effect over whatever the process started with.
+func exportTokensToEnv(tokenDir string) error {
+	if strings.TrimSpace(tokenDir) == "" {
+		var err error
+		if tokenDir, err = defaultTokenDir(); err != nil {
+			return err
+		}
 	}
 
 	for _, tokenType := range runtimeTokenTypes {

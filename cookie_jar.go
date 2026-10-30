@@ -94,14 +94,9 @@ func loadCookieParams(path string, now time.Time, promoteTo time.Duration) ([]*n
 	return params, nil
 }
 
-func defaultCookieJarPath() (string, error) {
-	dir, err := defaultTokenDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "sign-in-cookies.json"), nil
-}
-
+// cookieJarPath places the jar beside the browser profile, so the default
+// profile at ~/.config/fossteams/browser-profile keeps its cookies in
+// ~/.config/fossteams/sign-in-cookies.json.
 func cookieJarPath(profileDir string) string {
 	return filepath.Join(filepath.Dir(profileDir), "sign-in-cookies.json")
 }

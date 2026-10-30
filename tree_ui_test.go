@@ -153,3 +153,38 @@ func TestTreePinKeyIgnoresChannels(t *testing.T) {
 		t.Fatal("expected channels to be ignored by the pin key")
 	}
 }
+
+func TestRestoreFailedSendPutsTextBackForSameConversation(t *testing.T) {
+	state := newUITestState()
+	target := ConversationTarget{ID: "19:a", Title: "Alex", Kind: targetKindChat}
+	state.setCurrentConversation(target)
+	compose := state.components[InCompose].(*tview.InputField)
+
+	state.restoreFailedSend(target, "hello again")
+
+	if compose.GetText() != "hello again" {
+		t.Fatalf("expected failed text restored, got %q", compose.GetText())
+	}
+	if title := state.components[ViChat].(*tview.TextView).GetTitle(); !strings.Contains(title, "retry") {
+		t.Fatalf("expected retry hint in pane title, got %q", title)
+	}
+}
+
+func TestRestoreFailedSendSkipsOtherConversationAndNewDraft(t *testing.T) {
+	state := newUITestState()
+	failed := ConversationTarget{ID: "19:a", Title: "Alex", Kind: targetKindChat}
+	state.setCurrentConversation(ConversationTarget{ID: "19:b", Title: "Billie", Kind: targetKindChat})
+	compose := state.components[InCompose].(*tview.InputField)
+
+	state.restoreFailedSend(failed, "confidential note")
+	if compose.GetText() != "" {
+		t.Fatalf("expected no text restored while another conversation is selected, got %q", compose.GetText())
+	}
+
+	state.setCurrentConversation(failed)
+	compose.SetText("new draft")
+	state.restoreFailedSend(failed, "confidential note")
+	if compose.GetText() != "new draft" {
+		t.Fatalf("expected the newer draft to be kept, got %q", compose.GetText())
+	}
+}

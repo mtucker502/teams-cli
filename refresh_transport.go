@@ -50,13 +50,7 @@ func (s *AppState) runLiveRefreshLoop() {
 			s.startMessageRefresh()
 		case <-conversationTicker.C:
 			s.checkTokenExpiry()
-			if !atomic.CompareAndSwapUint32(&s.liveTreeRefreshActive, 0, 1) {
-				continue
-			}
-			go func() {
-				defer atomic.StoreUint32(&s.liveTreeRefreshActive, 0)
-				s.refreshConversationTree()
-			}()
+			s.startConversationTreeRefresh()
 		case <-s.appContext().Done():
 			return
 		}
@@ -73,6 +67,20 @@ func (s *AppState) startMessageRefresh() bool {
 	go func() {
 		defer atomic.StoreUint32(&s.liveMessageRefreshActive, 0)
 		s.refreshSelectedConversationMessages()
+	}()
+	return true
+}
+
+// startConversationTreeRefresh refetches the conversation list in the
+// background, unless a refresh is already running. It reports whether one
+// was started.
+func (s *AppState) startConversationTreeRefresh() bool {
+	if !atomic.CompareAndSwapUint32(&s.liveTreeRefreshActive, 0, 1) {
+		return false
+	}
+	go func() {
+		defer atomic.StoreUint32(&s.liveTreeRefreshActive, 0)
+		s.refreshConversationTree()
 	}()
 	return true
 }

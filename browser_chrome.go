@@ -303,7 +303,7 @@ func chromeFlowLauncher(opts refreshOptions) tokenFlowLauncher {
 
 		result, err := acquireTokens(ctx, browser, flow)
 		if err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 				return result, errTokenFlowTimeout
 			}
 			return result, err

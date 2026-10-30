@@ -28,6 +28,7 @@ type AppState struct {
 	refreshFunc                  func(ctx context.Context, interactive bool) error
 	reloadFunc                   func() error
 	tokenRefreshActive           uint32
+	lastTokenRefreshAt           int64
 	signInRequired               uint32
 	notice                       string
 	messageColumn                *tview.Flex

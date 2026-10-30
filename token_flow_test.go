@@ -346,3 +346,104 @@ func readPrefs(t *testing.T, profile string) map[string]any {
 	}
 	return prefs
 }
+
+func TestExportTokensToEnvOverridesStaleEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	writeTestJWT(t, dir, tokenTypeSkype, now.Add(time.Hour))
+	writeTestJWT(t, dir, tokenTypeChatSvcAgg, now.Add(time.Hour))
+	t.Setenv(tokenEnvName(tokenTypeSkype), "stale-skype")
+	t.Setenv(tokenEnvName(tokenTypeChatSvcAgg), "stale-chat")
+
+	if err := exportTokensToEnv(dir); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	for _, tokenType := range runtimeTokenTypes {
+		want, _ := os.ReadFile(tokenFilePath(dir, tokenType))
+		if got := os.Getenv(tokenEnvName(tokenType)); got != string(want) {
+			t.Fatalf("expected %s exported from file, got %q", tokenEnvName(tokenType), got)
+		}
+	}
+}
+
+func TestExportTokensToEnvUsesDefaultDirWhenUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".config", "fossteams")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	writeTestJWT(t, dir, tokenTypeSkype, now.Add(time.Hour))
+	writeTestJWT(t, dir, tokenTypeChatSvcAgg, now.Add(time.Hour))
+	t.Setenv(tokenEnvName(tokenTypeSkype), "stale-skype")
+	t.Setenv(tokenEnvName(tokenTypeChatSvcAgg), "stale-chat")
+
+	if err := exportTokensToEnv(""); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	want, _ := os.ReadFile(tokenFilePath(dir, tokenTypeSkype))
+	if got := os.Getenv(tokenEnvName(tokenTypeSkype)); got != string(want) {
+		t.Fatalf("expected skype token exported from the default directory, got %q", got)
+	}
+	// The startup helper keeps ignoring an unset directory so env-only setups still work.
+	t.Setenv(tokenEnvName(tokenTypeSkype), "env-only")
+	if err := applyTokenDirToEnv(""); err != nil || os.Getenv(tokenEnvName(tokenTypeSkype)) != "env-only" {
+		t.Fatalf("expected applyTokenDirToEnv to leave the environment alone, got %q err=%v", os.Getenv(tokenEnvName(tokenTypeSkype)), err)
+	}
+}
+
+func TestObtainTokenCallerDeadlineIsNotSignInRequired(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	browser := &fakeBrowser{t: t, redirects: []string{""}}
+
+	_, _, err := obtainToken(ctx, browser, tokenTypeTeams, "common", time.Minute)
+	if err == nil || errors.Is(err, errSignInRequired) {
+		t.Fatalf("expected the caller's deadline to be reported as a plain failure, got %v", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected the caller's deadline error to be preserved, got %v", err)
+	}
+}
+
+func TestSilentRefreshTimeoutCoversHeadlessFlow(t *testing.T) {
+	// Teams token, tenant probe, skype and chatsvcagg each get a headless
+	// step timeout; the outer deadline must not cut a slow but working run short.
+	if silentRefreshTimeout <= 4*headlessTokenTimeout {
+		t.Fatalf("silentRefreshTimeout %s cannot cover four %s headless steps", silentRefreshTimeout, headlessTokenTimeout)
+	}
+}
+
+func TestRunRefreshTokensLogoutRemovesProfileAndCookieJar(t *testing.T) {
+	base := t.TempDir()
+	profileDir := filepath.Join(base, "profile")
+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	jarPath := cookieJarPath(profileDir)
+	if err := os.WriteFile(jarPath, []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out strings.Builder
+	if err := runRefreshTokens(context.Background(), &out, strings.NewReader(""), AppOptions{Logout: true, ProfileDir: profileDir}); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if _, err := os.Stat(profileDir); !os.IsNotExist(err) {
+		t.Fatalf("expected profile removed, got %v", err)
+	}
+	if _, err := os.Stat(jarPath); !os.IsNotExist(err) {
+		t.Fatalf("expected cookie jar removed, got %v", err)
+	}
+	if !strings.Contains(out.String(), jarPath) {
+		t.Fatalf("expected output to name the cookie jar, got %q", out.String())
+	}
+
+	// A second logout with nothing left behind is not an error.
+	if err := runRefreshTokens(context.Background(), &out, strings.NewReader(""), AppOptions{Logout: true, ProfileDir: profileDir}); err != nil {
+		t.Fatalf("repeat logout: %v", err)
+	}
+}
